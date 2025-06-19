@@ -1,3 +1,11 @@
+"""
+Color Assistant - Copyright © 2025 @bigtitan1. All rights reserved.
+Licensed for personal and non-commercial use only.
+See license for details.
+"""
+
+
+
 import pyautogui
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
