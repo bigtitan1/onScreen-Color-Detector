@@ -1,266 +1,167 @@
-"""
-Color Assistant - Copyright © 2025 @bigtitan1. All rights reserved.
-Licensed for personal and non-commercial use only.
-See license for details.
-"""
-
-
-
 import pyautogui
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from tkinter import Toplevel, messagebox
 from PIL import ImageGrab
 import numpy as np
 import webcolors
-import csv
-import keyboard
-import json
+import webbrowser
+import sys
+import os
+
+# External modules
+import color_contrast
+import color_harmony_gen
+import color_saver
 
 
 
-
-# Global Variables
-save_file_path = None
-user_shortcut = None
-last_color_data = None
-
-# Setup CTk Appearance
-ctk.set_appearance_mode("Dark")  # or "Light"
-ctk.set_default_color_theme("dark-blue")
-
-# Get average color from screen
-def get_avg_color(x, y, area):
-    half = area // 2
-    bbox = (x - half, y - half, x + half, y + half)
-    img = ImageGrab.grab(bbox=bbox)
-    img_np = np.array(img)
-    avg_color = img_np.mean(axis=(0, 1)).astype(int)
-    return tuple(avg_color)
-
-# Accurate color name finder
-def get_color_name(rgb):
+def resource_path(relative_path):
     try:
-        return webcolors.rgb_to_name(rgb)
-    except ValueError:
-        min_distance = float('inf')
-        closest_name = "Unknown"
-        for name in webcolors.names("css3"):
-            hex_code = webcolors.name_to_hex(name)
-            r_c, g_c, b_c = webcolors.hex_to_rgb(hex_code)
-            dist = (r_c - rgb[0])**2 + (g_c - rgb[1])**2 + (b_c - rgb[2])**2
-            if dist < min_distance:
-                min_distance = dist
-                closest_name = name
-        return closest_name
+        return os.path.join(sys._MEIPASS, relative_path)
+    except Exception:
+        return os.path.abspath(relative_path)
 
 
-def load_settings():
-    global user_shortcut
-    try:
-        with open("settings.json", "r") as f:
-            settings = json.load(f)
-            if "shortcut" in settings:
-                user_shortcut = settings["shortcut"]
-                keyboard.add_hotkey(user_shortcut, save_color_to_file)
-                shortcut_entry.insert(0, user_shortcut)
-                shortcut_status.configure(text=f"Shortcut '{user_shortcut}' loaded", text_color="green")
-    except FileNotFoundError:
-        pass
 
+class ColorAssistantApp(ttk.Window):
+    def __init__(self):
+        super().__init__(title="PixPick", themename="darkly", size=(800, 520))
+        self.iconbitmap(resource_path("pixpick.ico"))
 
-def show_toast(message, duration=1500):
-    toast = ctk.CTkToplevel(root)
-    toast.title("Notification")
-    toast.overrideredirect(True)
-    toast.attributes("-topmost", True)
-    toast.attributes("-alpha", 0.9)  # Slight transparency
+        self.resizable(False, False)
 
-    # Size and position — bottom-right corner
-    width, height = 220, 50
-    x = root.winfo_x() + root.winfo_width() - width - 20
-    y = root.winfo_y() + root.winfo_height() - height - 20
-    toast.geometry(f"{width}x{height}+{x}+{y}")
+        self.last_color_data = None
+        self._style = ttk.Style()  # ✅ Local style object
 
-    # Background and message
-    frame = ctk.CTkFrame(toast, fg_color="#2a2a2a", corner_radius=10)
-    frame.pack(expand=True, fill="both", padx=5, pady=5)
+        self._build_ui()
+        self._update_color_info()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    label = ctk.CTkLabel(frame, text=message, text_color="white", font=("Segoe UI", 12))
-    label.pack(padx=10, pady=10)
+    def _build_ui(self):
+        self.hex_var = ttk.BooleanVar(value=True)
 
-    # Auto-close
-    toast.after(duration, toast.destroy)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=BOTH, expand=True)
 
+        # Tabs
+        self.main_frame = ttk.Frame(self.notebook, padding=10)
+        self.harmony_frame = ttk.Frame(self.notebook)
+        self.contrast_frame = ttk.Frame(self.notebook)
+        self.save_frame = ttk.Frame(self.notebook)
 
-# Live update color info
-def update_color_info():
-    global last_color_data
-    x, y = pyautogui.position()
-    area = int(area_slider.get())
-    rgb = get_avg_color(x, y, area)
-    color_name = get_color_name(rgb)
-    hex_code = f'#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}'
+        self.notebook.add(self.main_frame, text="Color Detection")
+        self.notebook.add(self.harmony_frame, text="Color Harmony")
+        self.notebook.add(self.contrast_frame, text="Contrast Checker")
+        self.notebook.add(self.save_frame, text="Save Colors")
 
-    display_text = f"{color_name}"
-    if hex_var.get():
-        display_text += f" | {hex_code}"
+        # Initialize each tab
+        self._init_main_tab()
+        self._embed_tools()
 
-    color_label.configure(text=display_text)
-    color_preview.configure(fg_color=hex_code)
+        footer = ttk.Label(self, text="Made by Bigtitan aka Yash Kalra", font=("Segoe UI", 9, "italic"))
+        footer.pack(padx=0 ,pady=(0, 10))
 
-    tooltip_label.configure(text=display_text)
-    tooltip_window.geometry(f"+{x + 15}+{y + 20}")
+    def _init_main_tab(self):
+        ttk.Label(self.main_frame, text="Current Color:", font=("Segoe UI", 14)).grid(row=0, column=0, sticky="w", columnspan=2)
 
-    last_color_data = (color_name, rgb, hex_code)
-    root.after(200, update_color_info)
+        self.color_label = ttk.Label(self.main_frame, text="Detecting...", font=("Segoe UI", 12))
+        self.color_label.grid(row=1, column=0, sticky="w", columnspan=2, pady=(0, 10))
 
-# Save to file
-def save_color_to_file():
-    if not save_file_path or not last_color_data:
-        messagebox.showerror("Error", "No file selected or color detected.")
-        return
+        ttk.Checkbutton(self.main_frame, text="Show HEX Code", variable=self.hex_var).grid(row=2, column=0, sticky="w")
 
-    color_name, rgb, hex_code = last_color_data
-    try:
-        if save_file_path.endswith(".csv"):
-            with open(save_file_path, "a", newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([color_name, str(rgb), hex_code])
-        else:
-            with open(save_file_path, "a") as f:
-                f.write(f"{color_name} | RGB: {rgb} | HEX: {hex_code}\n")
-        show_toast(f"{color_name} saved!")
+        ttk.Label(self.main_frame, text="Pointer Area (px):").grid(row=3, column=0, sticky="w")
+        self.area_slider = ttk.Scale(self.main_frame, from_=5, to=50, orient=HORIZONTAL)
+        self.area_slider.set(10)
+        self.area_slider.grid(row=4, column=0, sticky="ew", pady=(0, 10))
 
+        self.preview_box = ttk.Frame(self.main_frame, width=150, height=80, style="info.TFrame")
+        self.preview_box.grid(row=2, column=1, rowspan=3, padx=20)
+        self.preview_box.grid_propagate(False)
 
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
+        self.tooltip = Toplevel(self)
+        self.tooltip.overrideredirect(True)
+        self.tooltip.attributes("-topmost", True)
+        self.tooltip_label = ttk.Label(self.tooltip, text="", background="black", foreground="white")
+        self.tooltip_label.pack()
 
-# File browser
-def browse_file():
-    global save_file_path
-    path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV or TXT", "*.csv *.txt")])
-    if path:
-        save_file_path = path
-        file_label.configure(text=f"Selected: {path}")
+       
 
-# Keyboard shortcut setup
-def set_shortcut():
-    global user_shortcut
-    shortcut = shortcut_entry.get()
-    if shortcut:
-        try:
-            if user_shortcut:
-                keyboard.remove_hotkey(user_shortcut)
-            keyboard.add_hotkey(shortcut, save_color_to_file)
-            user_shortcut = shortcut
-            shortcut_status.configure(text=f"Shortcut '{shortcut}' set!", text_color="green")
-            save_settings()
-        except Exception as e:
-            shortcut_status.configure(text=f"Error: {str(e)}", text_color="red")
-            
+    def _embed_tools(self):
+        color_harmony_gen.ColorHarmonyGenerator(self.harmony_frame).pack(fill=BOTH, expand=True)
+        color_contrast.ColorContrastChecker(self.contrast_frame).pack(fill=BOTH, expand=True)
+        color_saver.ColorSaver(
+            parent=self.save_frame,
+            get_color_data=self._get_latest_color_data
+        ).pack(fill=BOTH, expand=True)
 
-
-def save_settings():
-    with open("settings.json", "w") as f:
-        json.dump({"shortcut": user_shortcut}, f)
-
-# Toggle features panel
-def toggle_features():
-    if feature_frame.winfo_ismapped():
-        feature_frame.grid_remove()
-    else:
-        feature_frame.grid(row=6, column=1, columnspan=2, padx=20, pady=10, sticky="ew")
-
-# GUI setup
-root = ctk.CTk()
-root.title("Color Assistant")
-root.geometry("700x480")
-root.resizable(False, False)
-
-color_label = ctk.CTkLabel(root, text="Initializing...", font=('Segoe UI', 16))
-color_label.grid(row=0, column=0, columnspan=2, padx=20, pady=(15, 5), sticky="ew")
-
-hex_var = ctk.BooleanVar()
-hex_check = ctk.CTkCheckBox(root, text="Show HEX Code", variable=hex_var)
-hex_check.grid(row=1, column=0, padx=20, pady=(5, 10), sticky="w")
-
-ctk.CTkLabel(root, text="Pointer Area (px):").grid(row=2, column=0, padx=20, pady=(5, 0), sticky="w")
-area_slider = ctk.CTkSlider(root, from_=1, to=50, number_of_steps=49)
-area_slider.set(10)
-area_slider.grid(row=3, column=1, columnspan=2, padx=20, pady=(0, 10))
-
-color_preview = ctk.CTkFrame(root, width=180, height=100, fg_color="#ffffff", corner_radius=12)
-color_preview.grid(row=1, column=3, rowspan=3, padx=10, pady=10, sticky="nsew")
-
-feature_button = ctk.CTkButton(root, text="Additional Features", command=toggle_features)
-feature_button.grid(row=4, column=1, columnspan=2, pady=(5, 0))
-
-# Feature panel
-feature_frame = ctk.CTkFrame(root, corner_radius=10)
-file_button = ctk.CTkButton(feature_frame, text="Browse & Save File", command=browse_file)
-file_button.grid(row=0, column=0, sticky="w", padx=5, pady=(5, 0))
-file_label = ctk.CTkLabel(feature_frame, text="No file selected", font=("Arial", 10), wraplength=300)
-file_label.grid(row=1, column=0, columnspan=2, sticky="w", padx=5)
-
-ctk.CTkLabel(feature_frame, text="Set Shortcut (e.g. ctrl+shift+c):").grid(row=2, column=0, sticky="w", padx=5, pady=(5, 0))
-shortcut_entry = ctk.CTkEntry(feature_frame, width=180)
-shortcut_entry.grid(row=3, column=0, sticky="w", padx=5)
-shortcut_set_button = ctk.CTkButton(feature_frame, text="Set", command=set_shortcut, width=50)
-shortcut_set_button.grid(row=3, column=1, sticky="w", padx=5)
-shortcut_status = ctk.CTkLabel(feature_frame, text="", font=("Arial", 10))
-shortcut_status.grid(row=4, column=0, columnspan=2, sticky="w", padx=5)
-
-feature_frame.grid_remove()
-
-def toggle_minimized_mode():
-    root.withdraw()  # Hide main window
-    minimized_window = ctk.CTkToplevel()
-    minimized_window.geometry("200x80+100+100")
-    minimized_window.title("Color Preview")
-    minimized_window.overrideredirect(False)
-    minimized_window.attributes("-topmost", True)
-
-    color_box = ctk.CTkLabel(minimized_window, width=30, height=30, text="")
-    color_box.grid(row=0, column=0, padx=10, pady=10)
-
-    color_text = ctk.CTkLabel(minimized_window, text="Fetching...")
-    color_text.grid(row=0, column=1, padx=10)
-
-    def update_minimized_color():
-        if not minimized_window.winfo_exists():
-            root.deiconify()  # Restore main window if closed
-            return
+    def _update_color_info(self):
         x, y = pyautogui.position()
-        area = int(area_slider.get())
-        rgb = get_avg_color(x, y, area)
-        hex_code = f'#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}'
-        name = get_color_name(rgb)
-        color_box.configure(fg_color=hex_code)
-        color_text.configure(text=f"{name}\n{hex_code}")
-        minimized_window.after(200, update_minimized_color)
+        area = max(2, int(self.area_slider.get()))
+        rgb = self._get_avg_color(x, y, area)
+        hex_code = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+        name = self._get_color_name(rgb)
 
-    update_minimized_color()
+        display_text = name
+        if self.hex_var.get():
+            display_text += f" | {hex_code}"
 
-    def close_minimized():
-        minimized_window.destroy()
-        root.deiconify()  # Restore main window
+        self.color_label.config(text=display_text)
+        self.preview_box.config(style="preview.TFrame")
+        self._style.configure("preview.TFrame", background=hex_code)
+        self.tooltip.geometry(f"+{x+15}+{y+20}")
+        self.tooltip_label.config(text=display_text, background=hex_code)
+        text_color = self._get_contrasting_text_color(rgb)
+        self.tooltip.geometry(f"+{x+15}+{y+20}")
+        self.tooltip_label.config(text=display_text, background=hex_code, foreground=text_color)
 
-    # Add a close button
-    close_btn = ctk.CTkButton(minimized_window, text="Restore", command=close_minimized, width=60, height=20)
-    close_btn.grid(row=1, column=0, columnspan=2, pady=(0, 10))
+        self.last_color_data = (name, rgb, hex_code)
+        self.after(200, self._update_color_info)
+
+    def _get_avg_color(self, x, y, area):
+        screen_w, screen_h = pyautogui.size()
+        half = area // 2
+        left, top = max(0, x - half), max(0, y - half)
+        right, bottom = min(screen_w, x + half), min(screen_h, y + half)
+
+        if right <= left or bottom <= top:
+            return (255, 255, 255)
+
+        img = ImageGrab.grab(bbox=(left, top, right, bottom))
+        img_np = np.array(img)
+        avg = img_np.mean(axis=(0, 1)).astype(int)
+        return tuple(avg)
+
+    def _get_color_name(self, rgb):
+        try:
+            return webcolors.rgb_to_name(rgb)
+        except ValueError:
+            min_distance = float('inf')
+            closest_name = "Unknown"
+            for name in webcolors.names("css3"):
+                hex_code = webcolors.name_to_hex(name)
+                r_c, g_c, b_c = webcolors.hex_to_rgb(hex_code)
+                dist = (r_c - rgb[0])**2 + (g_c - rgb[1])**2 + (b_c - rgb[2])**2
+                if dist < min_distance:
+                    min_distance = dist
+                    closest_name = name
+            return closest_name
+
+    def _get_contrasting_text_color(self, rgb):
+        # Calculate perceived brightness
+        brightness = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2])
+        return "black" if brightness > 186 else "white"
     
-minimize_btn = ctk.CTkButton(root, text="Minimize View", command=toggle_minimized_mode)
-minimize_btn.grid(row=0, column=3, columnspan=2, pady=5)
+    def _get_latest_color_data(self):
+        return self.last_color_data
+
+    def _on_close(self):
+        if messagebox.askokcancel("Exit", "Exit the app?"):
+            self.destroy()
+
+    
 
 
-# Tooltip
-tooltip_window = ctk.CTkToplevel(root)
-tooltip_window.overrideredirect(True)
-tooltip_window.attributes("-topmost", True)
-tooltip_window.attributes("-alpha", 0.8)
-tooltip_label = ctk.CTkLabel(tooltip_window, text="", font=("Segoe UI", 10), text_color="white")
-tooltip_label.pack()
-
-update_color_info()
-load_settings()
-root.mainloop()
+if __name__ == "__main__":
+    app = ColorAssistantApp()
+    app.mainloop()
